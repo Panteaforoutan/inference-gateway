@@ -2,9 +2,9 @@
 # 2. Hashes it.
 # 3. Connects to the same database your gateway uses and inserts a row: (hash, owner=”sara”, created_at=”now” revoked=”false”).
 # 4. Prints the key to your terminal once.
-import secrets, sys, hashlib, sqlite3, argparse
-from db import get_db
-   
+import secrets, argparse
+from db import get_db, get_hash
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--owner", type=str)
@@ -13,7 +13,7 @@ def main():
     # owner = sys.argv[2]
     owner = args.owner
     key = "pgw_" + secrets.token_urlsafe(32)
-    key_hash = hashlib.sha256(key.encode()).hexdigest()
+    key_hash = get_hash(key)
     
     db = get_db()
     

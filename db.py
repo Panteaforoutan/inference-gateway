@@ -1,6 +1,9 @@
-import sqlite3
+import hashlib, sqlite3
 
 DB_PATH = "gateway.db"
+
+def get_hash(key):
+    return hashlib.sha256(key.encode()).hexdigest()
 
 def get_db():
     db =  sqlite3.connect(DB_PATH)
