@@ -3,7 +3,8 @@
 
 # client request 
 # curl -X POST "http://localhost:8000/models/qwen2.5-1.5b-instruct/chat?stream=true" \
-#   -H "Content-Type: application/json" \
+#   -H 'Content-Type: application/json' \
+#   -H 'X-API-key: xyz' \
 #   -d '{"prompt": "What is FastAPI?"}'
 
 # gateway request
@@ -18,9 +19,10 @@
 
 import httpx
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException 
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from db import get_db, get_hash
 
 app = FastAPI()
 
@@ -32,8 +34,16 @@ BACKEND_URL = "http://localhost:8080/v1/chat/completions"
 
 
 @app.post("/models/{model_name}/chat")
-async def chat(model_name: str, req: ChatRequest, stream: bool = False):
+async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), stream: bool = False):
 
+    api_key_hash = get_hash(x_api_key)
+    db = get_db()
+    row = db.execute("SELECT key_hash FROM api_keys WHERE key_hash = ? AND revoked = 0", (api_key_hash,)).fetchone() # returns None if there are no rows
+    db.close()
+    
+    if row is None :
+        raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+    
     payload = {
         "messages": [{"role": "user", "content": req.prompt}]
     }
