@@ -1,25 +1,7 @@
-# FastAPI server on port 8000 that accepts a chat completion 
-# forwards it to it to llama-server on 8080 and streams the response back.
-
-# client request 
-# curl -X POST "http://localhost:8000/models/qwen2.5-1.5b-instruct/chat?stream=true" \
-#   -H 'Content-Type: application/json' \
-#   -H 'X-API-key: xyz' \
-#   -d '{"prompt": "What is FastAPI?"}'
-
-# gateway request
-# curl -X POST "http://localhost:8000/models/qwen2.5-1.5b-instruct/chat" \
-#   -d '{"prompt": "What is FastAPI?", "max_tokens": 100}'
-
-
-# format and send the request to qwen
-# curl http://localhost:8080/v1/chat/completions \
-#   -H "Content-Type: application/json" \
-#   -d '{"messages":[{"role":"user","content":"Explain a queue in one paragraph"}]}' 
-
 import datetime
 import time
 import httpx
+import os
 import json
 
 from fastapi import FastAPI, Header, HTTPException 
@@ -27,14 +9,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from db import get_db, get_hash
 
+BACKEND_URL = os.environ["BACKEND_URL"]
+
 app = FastAPI()
 
 class ChatRequest(BaseModel):
     prompt: str
     max_tokens: int = 256
-
-BACKEND_URL = "http://localhost:8080/v1/chat/completions"
-
 
 @app.post("/models/{model_name}/chat")
 async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), stream: bool = False):
@@ -55,6 +36,7 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
     payload = {
         "messages": [{"role": "user", "content": req.prompt}],
         "stream": stream,
+        "max_tokens": req.max_tokens,
         "stream_options": {"include_usage": True}
     } 
     
