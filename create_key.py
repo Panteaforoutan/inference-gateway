@@ -19,8 +19,8 @@ def main():
     
     # revoke the owner's previous active keys before adding the new one
     # (if the owner has no keys yet, this matches no rows and does nothing)
-    db.execute("UPDATE api_keys SET revoked = 1 WHERE owner = ? AND revoked = 0", (owner,))
-    db.execute("INSERT INTO api_keys (key_hash, owner) VALUES (?, ?)", (key_hash, owner))
+    db.execute("UPDATE api_keys SET revoked = true WHERE owner = %s AND revoked = false", (owner,))
+    db.execute("INSERT INTO api_keys (key_hash, owner) VALUES (%s, %s)", (key_hash, owner))
     db.commit()
     db.close()
     

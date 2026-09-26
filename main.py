@@ -38,7 +38,7 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
 
     api_key_hash = get_hash(x_api_key)
     db = get_db()
-    row = db.execute("SELECT key_hash FROM api_keys WHERE key_hash = ? AND revoked = 0", (api_key_hash,)).fetchone() # returns None if there are no rows
+    row = db.execute("SELECT key_hash FROM api_keys WHERE key_hash = ? AND revoked = false", (api_key_hash,)).fetchone() # returns None if there are no rows
     db.close()
     
     if row is None :
