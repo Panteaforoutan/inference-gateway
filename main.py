@@ -7,11 +7,19 @@ import json
 from fastapi import FastAPI, Header, HTTPException 
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from contextlib import asynccontextmanager
 from db import get_db, get_hash
 
 BACKEND_URL = os.environ["BACKEND_URL"]
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.client = httpx.AsyncClient(timeout=120)   # 1. startup: create ONE client
+    yield                                    # 2. server runs here
+    await app.state.client.aclose()          # 3. shutdown: close its pool
+
+
+app = FastAPI(lifespan=lifespan)
 
 class ChatRequest(BaseModel):
     prompt: str
@@ -35,19 +43,24 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
     
     payload = {
         "messages": [{"role": "user", "content": req.prompt}],
-        "stream": stream,
-        "max_tokens": req.max_tokens,
-        "stream_options": {"include_usage": True}
+        "max_tokens": req.max_tokens
     } 
     
+    client = app.state.client
+    
     if stream:
-        client = httpx.AsyncClient(timeout=120)
+        payload["stream"] = True
+        payload["stream_options"] = {"include_usage": True} 
+        
         backend_request = client.build_request("POST", BACKEND_URL, json=payload)
-        response = await client.send(backend_request, stream=True)  # it opens the connection and gets the response headers, but not the body yet.
+        try:
+            response = await client.send(backend_request, stream=True)
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"Backend unreachable: {e}")
+            
 
         if response.status_code != 200:
             body = await response.aread()
-            await client.aclose()
             await response.aclose()
             raise HTTPException(status_code=502, detail=f"Backend error: {body.decode()}")
 
@@ -60,6 +73,7 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
 
             try:
                 async for chunk in response.aiter_bytes(): 
+                    now = time.perf_counter()
                     yield chunk
                     buffer += chunk
                     while b"\n\n" in buffer:
@@ -79,7 +93,7 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
                         
                         choices = obj.get("choices") or []
                         if first_token_at is None and choices and choices[0].get("delta", {}).get("content"):
-                            first_token_at = time.perf_counter() 
+                            first_token_at = now 
                         
                         usage = obj.get("usage")
                         if usage:
@@ -88,6 +102,8 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
                             
             finally:
                 end_time = time.perf_counter() 
+                
+                await response.aclose()
                 
                 status = "ok" if got_done else "error"
 
@@ -98,26 +114,25 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
                 db.execute("INSERT INTO requests (api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", (api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms))
                 db.commit()
                 db.close()
-                
-                await client.aclose() 
-                await response.aclose()
-                
 
         return StreamingResponse(body_iterator(), media_type="text/event-stream")
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(BACKEND_URL, json=payload)
+    try:
+        response = await client.post(BACKEND_URL, json=payload) # while we wait for the backend to reply, the event loop is free to serve other users.
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Backend unreachable: {e}")
+
 
     end_time = time.perf_counter() 
     
-    status = "ok" if resp.status_code == 200 else "error"
+    status = "ok" if response.status_code == 200 else "error"
     
     tokens_in = None
     tokens_out = None
     obj = None
     
-    if resp.status_code == 200:
-        obj = resp.json()
+    if response.status_code == 200:
+        obj = response.json()
         usage = obj.get("usage")
         if usage:
             tokens_in = usage["prompt_tokens"]
@@ -131,7 +146,7 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
     db.commit()
     db.close()
     
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Backend error: {resp.text}")
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Backend error: {response.text}")
 
     return obj
