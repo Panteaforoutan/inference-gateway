@@ -1,5 +1,6 @@
 import datetime
 import time
+import anyio
 import httpx
 import os
 import json
@@ -104,15 +105,16 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
                             
             finally:
                 end_time = time.perf_counter() 
-                
-                await response.aclose()
-                
-                status = "ok" if got_done else "error"
-
-                ttft_ms  = int((first_token_at - start_time) * 1000) if first_token_at else None 
-                total_ms = int((end_time - start_time) * 1000)
-                
-                await log_request(api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms)
+                with anyio.move_on_after(5,shield=True):
+                    await response.aclose()
+                    status = "ok" if got_done else "error"
+                    ttft_ms  = int((first_token_at - start_time) * 1000) if first_token_at else None 
+                    total_ms = int((end_time - start_time) * 1000)
+                    try: 
+                        await log_request(api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms)
+                    except Exception as e:
+                        print(f"failed to log request: {e}") 
+                        
 
         return StreamingResponse(body_iterator(), media_type="text/event-stream")
 
