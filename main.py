@@ -8,16 +8,17 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
-from db import get_db, get_hash
+from db import pool, get_hash, log_request
 
 BACKEND_URL = os.environ["BACKEND_URL"]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.client = httpx.AsyncClient(timeout=120)   # 1. startup: create ONE client
+    await pool.open()
     yield                                    # 2. server runs here
     await app.state.client.aclose()          # 3. shutdown: close its pool
-
+    await pool.close()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -32,9 +33,10 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
     model = model_name
     
     api_key_hash = get_hash(x_api_key)
-    db = get_db()
-    row = db.execute("SELECT id FROM api_keys WHERE key_hash = %s AND revoked = false", (api_key_hash,)).fetchone() # returns None if there are no rows
-    db.close()
+    
+    async with pool.connection() as conn:
+        cur = await conn.execute("SELECT id FROM api_keys WHERE key_hash = %s AND revoked = false", (api_key_hash,)) # returns None if there are no rows
+        row = await cur.fetchone()
     
     if row is None :
         raise HTTPException(status_code=401, detail="Invalid or revoked API key")
@@ -110,10 +112,7 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
                 ttft_ms  = int((first_token_at - start_time) * 1000) if first_token_at else None 
                 total_ms = int((end_time - start_time) * 1000)
                 
-                db = get_db()
-                db.execute("INSERT INTO requests (api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", (api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms))
-                db.commit()
-                db.close()
+                await log_request(api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms)
 
         return StreamingResponse(body_iterator(), media_type="text/event-stream")
 
@@ -141,10 +140,7 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
     total_ms = int((end_time - start_time) * 1000)
     ttft_ms = None
                             
-    db = get_db()
-    db.execute("INSERT INTO requests (api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", (api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms))
-    db.commit()
-    db.close()
+    await log_request(api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms)
     
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail=f"Backend error: {response.text}")

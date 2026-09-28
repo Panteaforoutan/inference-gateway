@@ -1,9 +1,12 @@
 import hashlib, psycopg, os
 from dotenv import load_dotenv
+from psycopg_pool import AsyncConnectionPool
 
 load_dotenv()
 
 DATABASE_URL = os.environ["DATABASE_URL"]
+
+pool = AsyncConnectionPool(DATABASE_URL, open=False)
 
 SCHEMA = """
     CREATE TABLE IF NOT EXISTS api_keys (
@@ -29,6 +32,9 @@ SCHEMA = """
     CREATE INDEX ON requests (api_key_id, started_at);
 """
 
+async def log_request(api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms):
+    async with pool.connection() as conn:  
+        await conn.execute("INSERT INTO requests (api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", (api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms))
 
 def get_hash(key):
     return hashlib.sha256(key.encode()).hexdigest()
