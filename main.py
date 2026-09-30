@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from db import pool, get_hash, log_request
 from fastapi.middleware.cors import CORSMiddleware
+from scheduler import acquire, release
 
 BACKEND_URL = os.environ["BACKEND_URL"]
 
@@ -37,7 +38,7 @@ class ChatRequest(BaseModel):
 @app.post("/models/{model_name}/chat")
 async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), stream: bool = False):
     started_at = datetime.datetime.now(datetime.timezone.utc)   # for the started_at column
-    start_time = time.perf_counter()           # for measuring durations
+    start_time = time.perf_counter()                            # for measuring durations
     model = model_name
     
     api_key_hash = get_hash(x_api_key)
@@ -58,81 +59,94 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
     
     client = app.state.client
     
-    if stream:
-        payload["stream"] = True
-        payload["stream_options"] = {"include_usage": True} 
+    handed_off = False
+    await acquire()
         
-        backend_request = client.build_request("POST", BACKEND_URL, json=payload)
-        try:
-            response = await client.send(backend_request, stream=True)
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"Backend unreachable: {e}")
+    if stream:
+        try: 
+            payload["stream"] = True
+            payload["stream_options"] = {"include_usage": True} 
             
-
-        if response.status_code != 200:
-            body = await response.aread()
-            await response.aclose()
-            raise HTTPException(status_code=502, detail=f"Backend error: {body.decode()}")
-
-        async def body_iterator(): # an async generator, Each time the backend sends a chunk of bytes, it yields that chunk straight through without changing it.
-            first_token_at = None 
-            got_done = False
-            tokens_in = None
-            tokens_out = None
-            buffer = b""
-
+            backend_request = client.build_request("POST", BACKEND_URL, json=payload)
             try:
-                async for chunk in response.aiter_bytes(): 
-                    now = time.perf_counter()
-                    yield chunk
-                    buffer += chunk
-                    while b"\n\n" in buffer:
-                        event, buffer = buffer.split(b"\n\n", 1) # one full event, rest stays
-                        event = event.strip()
-                        
-                        if not event.startswith(b"data: "):
-                            continue
-                        
-                        data = event[len(b"data: "):]
-                        
-                        if data == b"[DONE]":
-                            got_done = True
-                            continue
-                        
-                        obj = json.loads(data)
-                        
-                        choices = obj.get("choices") or []
-                        if first_token_at is None and choices and choices[0].get("delta", {}).get("content"):
-                            first_token_at = now 
-                        
-                        usage = obj.get("usage")
-                        if usage:
-                            tokens_in = usage["prompt_tokens"]
-                            tokens_out = usage["completion_tokens"]
+                response = await client.send(backend_request, stream=True)
+            except httpx.RequestError as e:
+                total_ms = int((time.perf_counter() - start_time) * 1000)
+                await log_request(api_key_id, started_at, model, "error", None, None, None, total_ms)
+                raise HTTPException(status_code=502, detail=f"Backend unreachable: {e}")
+                
+
+            if response.status_code != 200:
+                body = await response.aread()
+                await response.aclose()
+                total_ms = int((time.perf_counter() - start_time) * 1000)
+                await log_request(api_key_id, started_at, model, "error", None, None, None, total_ms)
+                raise HTTPException(status_code=502, detail=f"Backend error: {body.decode()}")
+
+            async def body_iterator(): # an async generator, Each time the backend sends a chunk of bytes, it yields that chunk straight through without changing it.
+                first_token_at = None 
+                got_done = False
+                tokens_in = None
+                tokens_out = None
+                buffer = b""
+
+                try:
+                    async for chunk in response.aiter_bytes(): 
+                        now = time.perf_counter()
+                        yield chunk
+                        buffer += chunk
+                        while b"\n\n" in buffer:
+                            event, buffer = buffer.split(b"\n\n", 1) # one full event, rest stays
+                            event = event.strip()
                             
-            finally:
-                end_time = time.perf_counter() 
-                with anyio.move_on_after(5,shield=True):
-                    await response.aclose()
-                    status = "ok" if got_done else "error"
-                    ttft_ms  = int((first_token_at - start_time) * 1000) if first_token_at else None 
-                    total_ms = int((end_time - start_time) * 1000)
-                    try: 
-                        await log_request(api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms)
-                    except Exception as e:
-                        print(f"failed to log request: {e}") 
-                        
+                            if not event.startswith(b"data: "):
+                                continue
+                            
+                            data = event[len(b"data: "):]
+                            
+                            if data == b"[DONE]":
+                                got_done = True
+                                continue
+                            
+                            obj = json.loads(data)
+                            
+                            choices = obj.get("choices") or []
+                            if first_token_at is None and choices and choices[0].get("delta", {}).get("content"):
+                                first_token_at = now 
+                            
+                            usage = obj.get("usage")
+                            if usage:
+                                tokens_in = usage["prompt_tokens"]
+                                tokens_out = usage["completion_tokens"]
+                                
+                finally:
+                    end_time = time.perf_counter() 
+                    release()
+                    with anyio.move_on_after(5,shield=True):
+                        await response.aclose()
+                        status = "ok" if got_done else "error"
+                        ttft_ms  = int((first_token_at - start_time) * 1000) if first_token_at else None 
+                        total_ms = int((end_time - start_time) * 1000)
+                        try: 
+                            await log_request(api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms)
+                        except Exception as e:
+                            print(f"failed to log request: {e}") 
+            handed_off = True               
+            return StreamingResponse(body_iterator(), media_type="text/event-stream")
+        finally: 
+            if not handed_off:
+                release()
 
-        return StreamingResponse(body_iterator(), media_type="text/event-stream")
-
-    try:
+    try: 
         response = await client.post(BACKEND_URL, json=payload) # while we wait for the backend to reply, the event loop is free to serve other users.
     except httpx.RequestError as e:
+        total_ms = int((time.perf_counter() - start_time) * 1000)
+        await log_request(api_key_id, started_at, model, "error", None, None, None, total_ms)
         raise HTTPException(status_code=502, detail=f"Backend unreachable: {e}")
-
+    finally:
+        release()
 
     end_time = time.perf_counter() 
-    
     status = "ok" if response.status_code == 200 else "error"
     
     tokens_in = None
