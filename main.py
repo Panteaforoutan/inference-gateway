@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from db import pool, get_hash, log_request
+from fastapi.middleware.cors import CORSMiddleware
 
 BACKEND_URL = os.environ["BACKEND_URL"]
 
@@ -22,6 +23,12 @@ async def lifespan(app: FastAPI):
     await pool.close()
 
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["GET"],
+)
 
 class ChatRequest(BaseModel):
     prompt: str
@@ -148,3 +155,39 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
         raise HTTPException(status_code=502, detail=f"Backend error: {response.text}")
 
     return obj
+
+
+
+@app.get("/stats")
+async def stats():
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            SELECT id, api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms
+            FROM requests
+            ORDER BY started_at DESC
+            LIMIT 20
+            """
+        )
+        cols = [c.name for c in cur.description]
+        recent = [dict(zip(cols, row)) for row in await cur.fetchall()]
+
+        # one pass over the last minute; FILTER narrows each aggregate to its own window
+        cur = await conn.execute(
+            """
+            SELECT
+                count(*) FILTER (WHERE started_at > now() - interval '10 seconds') / 10.0 AS requests_per_sec,
+                percentile_cont(0.95) WITHIN GROUP (ORDER BY ttft_ms) AS p95_ttft_ms,
+                count(*) FILTER (WHERE status <> 'ok') AS errors_last_minute
+            FROM requests
+            WHERE started_at > now() - interval '1 minute'
+            """
+        )
+        requests_per_sec, p95_ttft_ms, errors_last_minute = await cur.fetchone()
+
+    return {
+        "recent": recent,
+        "requests_per_sec": float(requests_per_sec),
+        "p95_ttft_ms": p95_ttft_ms,
+        "errors_last_minute": errors_last_minute,
+    }
