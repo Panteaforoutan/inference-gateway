@@ -4,6 +4,7 @@ import anyio
 import httpx
 import os
 import json
+import scheduler
 
 from fastapi import FastAPI, Header, HTTPException 
 from fastapi.responses import StreamingResponse
@@ -11,7 +12,8 @@ from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from db import pool, get_hash, log_request
 from fastapi.middleware.cors import CORSMiddleware
-from scheduler import acquire, release
+from scheduler import acquire, release, waiting  
+
 
 BACKEND_URL = os.environ["BACKEND_URL"]
 
@@ -204,4 +206,6 @@ async def stats():
         "requests_per_sec": float(requests_per_sec),
         "p95_ttft_ms": p95_ttft_ms,
         "errors_last_minute": errors_last_minute,
+        "in_flight": scheduler.in_flight,
+        "waiting": len(waiting)
     }
