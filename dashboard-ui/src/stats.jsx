@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import './stats.css';
 
 function Stats() {
     const [data, setData] = useState([]);
@@ -32,12 +33,31 @@ function Stats() {
         <div>
             <p>Requests/sec: {data.requests_per_sec}</p>
             <p>p95 TTFT: {data.p95_ttft_ms ?? '—'} ms</p>
+            <p>In flight: {data.in_flight}</p>
+            <p>Waiting: {data.waiting}</p>
             <p>Errors (last min): {data.errors_last_minute}</p>
-            <ul>
-                {data.recent.map(r => (
-                    <li key={r.id}>{r.model} · {r.status} · {r.total_ms} ms</li>
-                ))}
-            </ul>
+            <table className="recent-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Received</th>
+                        <th>Status</th>
+                        <th>TTFT (ms)</th>
+                        <th>Total (ms)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {data.recent.map(r => (
+                        <tr key={r.id}>
+                            <td>{r.id}</td>
+                            <td>{new Date(r.started_at).toLocaleString()}</td>
+                            <td>{r.status}</td>
+                            <td className="num">{r.ttft_ms ?? '—'}</td>
+                            <td className="num">{r.total_ms}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
         </div>
     );
 }
