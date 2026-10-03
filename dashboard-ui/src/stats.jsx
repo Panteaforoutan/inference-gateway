@@ -16,6 +16,7 @@ function Stats() {
                 }
                 const json = await response.json();
                 setData(json);
+                setError(null);
             } catch (err) {
                 setError(err.message);
             } finally {
@@ -24,7 +25,12 @@ function Stats() {
         };
 
         fetchData();
-    }, []); // Empty dependency array ensures this runs exactly once on mount
+        // Poll for fresh stats every second
+        const intervalId = setInterval(fetchData, 1000);
+
+        // Stop polling when the component unmounts
+        return () => clearInterval(intervalId);
+    }, []); // Empty dependency array: set up polling once on mount
 
     if (loading) return <p>Loading...</p>;
     if (error) return <p>Error: {error}</p>;
