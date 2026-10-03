@@ -5,13 +5,7 @@
 import secrets, argparse
 from db import get_db, get_hash
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--owner", type=str)
-    args = parser.parse_args()
-    
-    # owner = sys.argv[2]
-    owner = args.owner
+def create_key(owner):
     key = "pgw_" + secrets.token_urlsafe(32)
     key_hash = get_hash(key)
     
@@ -23,9 +17,14 @@ def main():
     db.execute("INSERT INTO api_keys (key_hash, owner) VALUES (%s, %s)", (key_hash, owner))
     db.commit()
     db.close()
-    
-    print(f"Key for {owner}: {key}") 
-    
+
+    return key
+
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--owner", type=str, required=True)
+    args = parser.parse_args()
+
+    key = create_key(args.owner)
+    print(f"Key for {args.owner}: {key}")
