@@ -163,7 +163,7 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
             tokens_out = usage["completion_tokens"]
 
     total_ms = int((end_time - start_time) * 1000)
-    ttft_ms = None
+    ttft_ms = total_ms
                             
     await log_request(api_key_id, started_at, model, status, tokens_in, tokens_out, ttft_ms, total_ms)
     
