@@ -2,7 +2,8 @@ import collections
 import asyncio
 
 waiting = collections.deque()
-MAX = 2
+n_slots = 4
+MAX = n_slots
 in_flight = 0
 
 
