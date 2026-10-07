@@ -17,6 +17,15 @@ from scheduler import acquire, release, waiting
 
 BACKEND_URL = os.environ["BACKEND_URL"]
 
+# llama-server numbers adapters by the order of the --lora flags at launch:
+#   llama-server -m base.gguf --lora sql.gguf --lora farsi.gguf --lora-init-without-apply
+LORA_IDS = {"sql": 0, "farsi": 1}
+MODELS = {"base", *LORA_IDS}
+
+def lora_scales(model_name: str):
+    # set every adapter explicitly so a request never inherits another adapter's scale
+    return [{"id": i, "scale": 1.0 if name == model_name else 0.0} for name, i in LORA_IDS.items()]
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.client = httpx.AsyncClient(timeout=120)   # 1. startup: create ONE client
@@ -53,11 +62,15 @@ async def chat(model_name: str, req: ChatRequest, x_api_key: str = Header(), str
         raise HTTPException(status_code=401, detail="Invalid or revoked API key")
     
     api_key_id = row[0]
-    
+
+    if model_name not in MODELS:
+        raise HTTPException(status_code=404, detail=f"Unknown model '{model_name}', expected one of {sorted(MODELS)}")
+
     payload = {
         "messages": [{"role": "user", "content": req.prompt}],
-        "max_tokens": req.max_tokens
-    } 
+        "max_tokens": req.max_tokens,
+        "lora": lora_scales(model_name)
+    }
     
     client = app.state.client
     
