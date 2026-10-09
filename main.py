@@ -18,8 +18,8 @@ from scheduler import acquire, release, waiting
 BACKEND_URL = os.environ["BACKEND_URL"]
 
 # llama-server numbers adapters by the order of the --lora flags at launch:
-#   llama-server -m base.gguf --lora sql.gguf --lora farsi.gguf --lora-init-without-apply
-LORA_IDS = {"sql": 0, "farsi": 1}
+#   llama-server -m base.gguf --lora sql.gguf --lora alpaca.gguf --lora-init-without-apply
+LORA_IDS = {"sql": 0, "alpaca": 1}
 MODELS = {"base", *LORA_IDS}
 
 def lora_scales(model_name: str):
