@@ -26,8 +26,8 @@ dashboard (React) ◄── GET /stats (polled every second)
 
 ## Features
 
-- API key authentication (keys are stored as SHA-256 hashes, never in plain text)
-- Per-request LoRA adapter switching on a single model server, with no reloads
+- API key authentication (keys are stored as SHA-256 hashes)
+- Per-request LoRA adapter switching on a single model server
 - Streaming and non-streaming responses
 - Concurrency limit with a FIFO queue so the model server isn't overloaded
 - Request logging to Postgres
@@ -46,7 +46,6 @@ Base model: **Qwen 2.5 1.5B Instruct** (GGUF, Q4_K_M), served by llama.cpp's `ll
 
 Both adapters are loaded once when llama-server starts. Each request sets every adapter's scale (`1.0` for the requested one, `0.0` for the rest), so switching models costs nothing. Any other `model_name` returns `404`.
 
-Qwen 2.5 is multilingual, so the base model already understands and answers in languages like Farsi without an adapter.
 
 ### Training the adapters
 
@@ -57,7 +56,7 @@ Both adapters were trained in Google Colab on top of Qwen 2.5 1.5B Instruct:
 
 The trained adapters were converted to GGUF with llama.cpp's `convert_lora_to_gguf.py` so `llama-server` can load them.
 
-<!-- TODO: training library (PEFT / Unsloth), LoRA rank and alpha, epochs or steps -->
+
 
 ## Setup
 
@@ -174,17 +173,7 @@ This sends 50 requests at once. For each request it picks a random model (`base`
 The gateway lets 4 requests through at a time and queues the rest, so even large bursts complete. Watch the dashboard while it runs to see the queue fill and drain.
 
 
-## Design decisions
-
-- **Concurrency limit of 4 with a FIFO queue.** This matches llama-server's 4 slots, so waiting happens in the gateway, where it can be measured.
-- **One shared `httpx.AsyncClient`.** Connections to llama-server are reused instead of opened for every request.
-- **All adapters on one server.** Switching is done per request with adapter scales, not by running one server per model.
-- **TTFT for non-streaming requests = total time.** The client gets nothing until the whole response is ready.
-
-The full reasoning is in [DESIGN.md](docs/DESIGN.md).
-
-## Limitations / future work
+## Future work
 
 - No per-user rate limits yet. The plan is to track tokens per key, return `429` when a user is over their limit, and replace the FIFO queue with a scheduler that favours light users and short requests.
-- The slot limit (4) and the adapter list are hardcoded. Adding an adapter means editing `main.py` and restarting llama-server.
-- Runs on a single machine with a single model server.
+
